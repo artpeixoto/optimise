@@ -1,44 +1,73 @@
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedFieldPuns, ImportQualifiedPost #-}
 module Optimise where
-import qualified Data.Vector as V
 
--- a função abaixo transforma uma função de duas variaveis 
-lift :: (a -> b -> c) -> V.Vector a -> V.Vector b -> V.Vector c
-lift = V.zipWith 
+import Data.Vector qualified as V 
+import Linear.Algebra
+import Linear.Metric(norm)
 
-data ParamDerivNum = 
-    ParamDerivNum
-    {   delta :: Double 
-    }
+pontoAPonto :: (a -> b -> c) -> V.Vector a -> V.Vector b -> V.Vector c
+pontoAPonto = V.zipWith 
 
+type ParamDerivNum = Double 
+type Vetor = V.Vector Double
+type Matriz = V.Vector (V.Vector Double)
+type Escalar = Double
+        
 -- essa funcao a derivada de uma funcao f(x) em que x é um vetor e y é escalar. A derivada é calculada numericamente. 
-derivNumFnVet ::  ParamDerivNum -> (V.Vector Double -> Double) -> (V.Vector Double -> V.Vector Double)
-
-derivNumFnVet ParamDerivNum{delta} f = 
+derivNumFnVet ::  ParamDerivNum -> (Vetor -> Double) -> (Vetor -> Vetor)
+derivNumFnVet delta f = 
     let 
-        obtenhaDeltas :: V.Vector Double -> [(V.Vector Double, V.Vector Double)]
-        obtenhaDeltas x_0 = 
+        obtenhaDeltas :: Vetor -> [(Vetor, Vetor)]
+        obtenhaDeltas x0 = 
             let 
                 dimX :: Int
-                dimX = V.length x_0
+                dimX = V.length x0
 
-                facaParXDelta :: Int -> (V.Vector Double, V.Vector Double) 
+                facaParXDelta :: Int -> (Vetor, Vetor) 
                 facaParXDelta n = 
                     let 
                         vec_with_delta_at_n = 
                             V.fromList [ (\i -> if i == n then delta / 2 else 0) i  |  i <- [0..dimX] ]
                     in 
-                        (  lift (+)  x_0 vec_with_delta_at_n 
-                        ,  lift (-)  x_0 vec_with_delta_at_n
+                        (  pontoAPonto (+)  x0 vec_with_delta_at_n 
+                        ,  pontoAPonto (-)  x0 vec_with_delta_at_n
                         )
             in 
                 [ facaParXDelta x | x <- [0..dimX] ]
 
-        calculeDySobreDx :: (V.Vector Double, V.Vector Double) -> Double
+        calculeDySobreDx :: (Vetor, Vetor) -> Double
         calculeDySobreDx (x_plus_delta, x_minus_delta) = 
             ((f x_plus_delta) -  (f x_minus_delta)) / delta 
         in  
-            \x -> V.fromList . map calculeDySobreDx . obtenhaDeltas $ x  
+            \x -> x |> obtenhaDeltas |> map clculeDySobreDx |> V.fromList 
+
+derivNumFnMat :: ParamDerivNum -> (Vetor -> Vetor) -> (Vetor -> Matriz)
+derivNumFnMat delta fVet xVet = 
+    let 
+        obtenhaDeltas :: Vetor -> [(Vetor, Vetor)]
+        obtenhaDeltas x0 = 
+            let 
+                dimX :: Int
+                dimX = V.length x0
+
+                facaParXDelta :: Int -> (Vetor, Vetor) 
+                facaParXDelta n = 
+                    let 
+                        vec_with_delta_at_n = 
+                            V.fromList [ (\i -> if i == n then delta / 2 else 0) i  |  i <- [0..dimX] ]
+                    in 
+                        (  pontoAPonto (+)  x0 vec_with_delta_at_n 
+                        ,  pontoAPonto (-)  x0 vec_with_delta_at_n
+                        )
+            in 
+                [ facaParXDelta x | x <- [0..dimX] ]
+
+        calculeDySobreDx :: (Vetor, Vetor) -> Vetor
+        calculeDySobreDx (xMaisDelta, xMenosDelta) = 
+            (fVet xMaisDelta !-! fVet xMenosDelta) 
+            |> fmap (/delta)
+    in 
+        \xVet -> V.fromList . map calculeDySobreDx . obtenhaDeltas $ xVet
 
 single :: V.Vector a -> a
 single v = if V.length v == 1 then v V.! 0 else error "Vetor deve ter apenas um elemento"
@@ -57,22 +86,29 @@ data Passo a b =
     deriving (Show, Eq)
 
 type PassoEscalar = Passo Double Double
+type PassoVet     = Passo (Vetor) Double
 
 infixl 0 |>
 (|>) :: a -> (a -> b) -> b
 x |> f = f x
 
-type Epsilon = Double ;
 
-deveParar :: Epsilon -> Passo a Double -> Passo a Double -> Bool
-deveParar epsilon Passo {x=_, y=yAnterior} Passo {x=_, y=yAtual} = 
-    ( yAtual - yAnterior 
+deveParar :: Double -> Passo Double a  -> Passo Double a -> Bool
+deveParar epsilon Passo {x=xAnterior, y=_ } Passo {x=xAtual, y=_} = 
+    ( xAnterior - xAtual
     |> abs 
     |> \diff -> diff <= epsilon
     )
 
+devePararVet :: Double -> Passo Vetor a -> PassoVetor a -> Bool
 
-executarPassos :: (Passo a Double -> Passo a Double -> Bool) -> ((Passo a Double) -> (Passo a Double)) -> Passo a Double -> [Passo a Double]
+devePararVet epsilon Passo{x=xAnterior, y=_} Passo{x=xAtual, y=_} = 
+    let distanciaAndada = xAnterior !-! xAtual |> norm 
+    in  distanciaAndada <= epsilon
+ 
+
+
+executarPassos :: (Passo a b -> Passo a b -> Bool) -> ((Passo a b) -> (Passo a b)) -> Passo a b -> [Passo a b]
 
 executarPassos criterioParada algoritmo passoInicial = 
     let obtenhaPassosSeguintes passoAnterior =
